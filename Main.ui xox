@@ -1,0 +1,531 @@
+-- Dimitris Skinchanger + Bullet Beams | PC Only | RightShift to toggle | Cute Halloween Theme
+if game:GetService("CoreGui"):FindFirstChild("SkinBeamGui") then game:GetService("CoreGui"):FindFirstChild("SkinBeamGui"):Destroy() end
+
+local P = game:GetService("Players")
+local RS2 = game:GetService("ReplicatedStorage")
+local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TweenService")
+local HS = game:GetService("HttpService")
+local LP = P.LocalPlayer
+
+-- ===== STATE =====
+local SkinState = {
+    enabled = false,
+    DoubleBarrel = "", Revolver = "", TacticalShotgun = "",
+    SMG = "", Shotgun = "", Silencer = "",
+    special = { Knife = "" }
+}
+local BulletChanger = { DoubleBarrel = "Beta", Revolver = "Beta", Shotgun = "Beta", SMG = "Beta", TacticalShotgun = "Beta" }
+local BulletBeamsEnabled = false
+
+local BEAM_HASH = {
+    DoubleBarrel = "109d1326878cc594bc1bb42d126250810999782f",
+    Revolver = "539db315b53f77390c0aa74773158e25bedcdd6e",
+    Shotgun = "b415a7273aa86cbc2adc445fde5435eb5afababa",
+    SMG = "005af87725b42ac4ca8103d11af6bf0c7d55f7b3",
+    TacticalShotgun = "109d1326878cc594bc1bb42d126250810999782f"
+}
+local BEAM_OPTIONS = { "Beta", "Hallows", "Kitty", "Kirumi", "Rainbow", "Red", "Blue", "Green", "Orange" }
+
+-- ===== HELPERS =====
+local function isBasePart(inst) return typeof(inst) == "Instance" and inst:IsA("BasePart") end
+
+local function ensurePrimary(model)
+    if model and model:IsA("Model") then
+        if not isBasePart(model.PrimaryPart) then
+            local bp = model:FindFirstChildWhichIsA("BasePart")
+            if bp then model.PrimaryPart = bp end
+        end
+        return model.PrimaryPart
+    end
+end
+
+local function prepSkinModel(skin, isKnife)
+    for _, d in ipairs(skin:GetDescendants()) do
+        if d:IsA("BasePart") then
+            d.CanCollide = false; d.Anchored = false; d.Massless = true
+            d.Transparency = math.clamp(d.Transparency, 0, 1)
+        elseif d:IsA("MeshPart") then
+            local sa = d:FindFirstChildOfClass("SurfaceAppearance")
+            if sa then sa:Destroy() end
+            if d.TextureID == "" then
+                local n = d.Name:lower()
+                if n:find("box") or n:find("cube") or n:find("part") or n:find("hit") then
+                    d.Transparency = 1
+                end
+            end
+        end
+    end
+end
+
+local function weldTo(handle, part)
+    if isBasePart(handle) and isBasePart(part) then
+        local w = Instance.new("WeldConstraint")
+        w.Part0 = handle; w.Part1 = part; w.Parent = part
+        return w
+    end
+end
+
+local function getWrapSkin(toolName, skinName, timeout)
+    local wraps = RS2:WaitForChild("Wraps", timeout or 5)
+    if not wraps then return nil end
+    local folder = wraps:WaitForChild("[" .. toolName .. "]", timeout or 5)
+    if not folder or skinName == "" then return nil end
+    return folder:WaitForChild(skinName, timeout or 5)
+end
+
+local function applySkinToTool(tool, skinModel)
+    if not tool or not skinModel then return end
+    local handle = tool:FindFirstChild("Handle")
+    if not isBasePart(handle) then return end
+    local old = tool:FindFirstChild("SkinModel")
+    if old then old:Destroy() end
+    local clone = skinModel:Clone()
+    clone.Name = "SkinModel"
+    if not isBasePart(ensurePrimary(clone)) then return end
+    prepSkinModel(clone, tool.Name:find("Knife") and true or false)
+    clone.Parent = tool
+    clone:PivotTo(handle.CFrame)
+    for _, p in ipairs(clone:GetDescendants()) do
+        if p:IsA("BasePart") then weldTo(handle, p) end
+    end
+    handle.Transparency = 1
+end
+
+local function applyToolSkin(tool)
+    if not SkinState.enabled or not tool or not tool:IsA("Tool") then return end
+    local name = tool.Name:match("^%[(.+)%]$")
+    if not name then return end
+    local skin = SkinState[name]
+    if name == "Knife" then skin = SkinState.special.Knife end
+    if not skin or skin == "" then
+        local old = tool:FindFirstChild("SkinModel")
+        if old then old:Destroy() end
+        local h = tool:FindFirstChild("Handle")
+        if isBasePart(h) then h.Transparency = 0 end
+        return
+    end
+    local src
+    if name == "Knife" then
+        local knives = RS2:FindFirstChild("Knives")
+        src = knives and knives:FindFirstChild(skin)
+    else
+        src = getWrapSkin(name, skin, 5)
+    end
+    if src then applySkinToTool(tool, src) end
+end
+
+local function scanCharacter(char)
+    if not char then return end
+    for _, c in ipairs(char:GetChildren()) do
+        if c:IsA("Tool") then task.defer(function() applyToolSkin(c) end) end
+    end
+    char.ChildAdded:Connect(function(c)
+        if c:IsA("Tool") then task.defer(function() applyToolSkin(c) end) end
+    end)
+end
+
+if LP.Character then task.spawn(scanCharacter, LP.Character) end
+LP.CharacterAdded:Connect(function(c) task.wait(1); scanCharacter(c) end)
+
+-- ===== BULLET BEAMS =====
+local function applyBulletBeams()
+    if not BulletBeamsEnabled then return end
+    local df = LP:FindFirstChild("DataFolder")
+    if not df then return end
+    local inv = df:FindFirstChild("InventoryData")
+    if not inv then return end
+    local equipped = df:FindFirstChild("EquippedBulletBeams")
+    local ib = inv:FindFirstChild("BulletBeams")
+    if ib and ib:IsA("StringValue") then
+        local data = {}
+        if ib.Value ~= "" then pcall(function() data = HS:JSONDecode(ib.Value) end) end
+        if type(data) ~= "table" then data = {} end
+        for _, hash in pairs(BEAM_HASH) do
+            data[hash] = { Name = BulletChanger.DoubleBarrel }
+        end
+        ib.Value = HS:JSONEncode(data)
+    end
+    if equipped and equipped:IsA("StringValue") then
+        equipped.Value = HS:JSONEncode({
+            ["[DoubleBarrel]"] = BEAM_HASH.DoubleBarrel,
+            ["[Revolver]"] = BEAM_HASH.Revolver,
+            ["[TacticalShotgun]"] = BEAM_HASH.TacticalShotgun,
+            ["[SMG]"] = BEAM_HASH.SMG,
+            ["[Shotgun]"] = BEAM_HASH.Shotgun
+        })
+    end
+end
+
+-- ===== GUI =====
+local T = {
+    Bg = Color3.fromRGB(30,20,38), Pnl = Color3.fromRGB(45,30,55),
+    PL = Color3.fromRGB(70,45,85), A = Color3.fromRGB(255,170,120),
+    AG = Color3.fromRGB(255,200,160), Tx = Color3.fromRGB(255,240,220),
+    Dg = Color3.fromRGB(255,140,180), On = Color3.fromRGB(255,170,120),
+    Off = Color3.fromRGB(80,60,90)
+}
+
+local function parentGui()
+    local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+    if ok and cg then return cg end
+    return LP:WaitForChild("PlayerGui")
+end
+
+local sg = Instance.new("ScreenGui")
+sg.Name = "SkinBeamGui"
+sg.ResetOnSpawn = false
+sg.IgnoreGuiInset = true
+sg.DisplayOrder = 999
+sg.Parent = parentGui()
+
+-- Main window (hidden by default)
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0.5, 0, 0.7, 0)
+main.Position = UDim2.new(0.25, 0, 0.15, 0)
+main.BackgroundColor3 = T.Bg
+main.BackgroundTransparency = 0.55
+main.BorderSizePixel = 0
+main.Active = true
+main.Visible = false
+main.Parent = sg
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 20)
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = T.A; stroke.Thickness = 1.8; stroke.Transparency = 0.45
+
+-- Floating transparent bats
+local batLayer = Instance.new("Frame")
+batLayer.Size = UDim2.new(1, 0, 1, 0)
+batLayer.BackgroundTransparency = 1
+batLayer.ZIndex = 1
+batLayer.ClipsDescendants = true
+batLayer.Parent = main
+
+local bats = {}
+local function makeBat(size, sx, sy, vx, vy, transp)
+    local b = Instance.new("TextLabel")
+    b.Size = UDim2.new(0, size, 0, size)
+    b.Position = UDim2.new(sx, sy, 0, 0)
+    b.BackgroundTransparency = 1
+    b.Text = "🦇"
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = size * 0.8
+    b.TextColor3 = Color3.fromRGB(255, 255, 255)
+    b.TextTransparency = transp or 0.55
+    b.ZIndex = 1
+    b.Parent = batLayer
+    table.insert(bats, { obj = b, x = sx, y = sy, vx = vx, vy = vy, size = size })
+end
+makeBat(52, 0.10, 0.15, 0.50, 0.38, 0.55)
+makeBat(64, 0.55, 0.55, 0.42, 0.52, 0.60)
+makeBat(44, 0.28, 0.70, 0.60, 0.44, 0.50)
+makeBat(58, 0.75, 0.18, 0.46, 0.58, 0.58)
+
+task.spawn(function()
+    while batLayer.Parent do
+        local dt = task.wait(0.03)
+        if not main.Visible then
+            task.wait(0.1)
+        else
+            local w, h = main.AbsoluteSize.X, main.AbsoluteSize.Y
+            for _, b in ipairs(bats) do
+                local px = b.x * w + b.vx * w * dt
+                local py = b.y * h + b.vy * h * dt
+                if px < 0 or px > w - b.size then b.vx = -b.vx; px = math.clamp(px, 0, w - b.size) end
+                if py < 0 or py > h - b.size then b.vy = -b.vy; py = math.clamp(py, 0, h - b.size) end
+                b.x = px / w; b.y = py / h
+                b.obj.Position = UDim2.new(0, px, 0, py)
+                b.obj.Rotation = math.sin(tick() * 3 + b.size) * 14
+            end
+        end
+    end
+end)
+
+-- Header (no X button)
+local hdr = Instance.new("Frame")
+hdr.Size = UDim2.new(1, 0, 0, 56)
+hdr.BackgroundColor3 = T.Pnl
+hdr.BackgroundTransparency = 0.45
+hdr.BorderSizePixel = 0
+hdr.Parent = main
+Instance.new("UICorner", hdr).CornerRadius = UDim.new(0, 20)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -32, 1, 0)
+title.Position = UDim2.new(0, 16, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "🔪 Dimitris Skinchanger 🎃"
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.TextColor3 = T.A
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.ZIndex = 3
+title.Parent = hdr
+
+-- Dragging
+local dragging, dragStart, startPos = false
+hdr.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true; dragStart = i.Position; startPos = main.Position
+        i.Changed:Connect(function()
+            if i.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+UIS.InputChanged:Connect(function(i)
+    if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+        local d = i.Position - dragStart
+        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+
+-- Body
+local body = Instance.new("ScrollingFrame")
+body.Size = UDim2.new(1, -24, 1, -72)
+body.Position = UDim2.new(0, 12, 0, 64)
+body.BackgroundTransparency = 1
+body.BorderSizePixel = 0
+body.ScrollBarThickness = 6
+body.ScrollBarImageColor3 = T.A
+body.CanvasSize = UDim2.new(0, 0, 0, 0)
+body.AutomaticCanvasSize = Enum.AutomaticSize.Y
+body.ZIndex = 3
+body.Parent = main
+local bl = Instance.new("UIListLayout", body)
+bl.Padding = UDim.new(0, 12)
+bl.SortOrder = Enum.SortOrder.LayoutOrder
+local bp = Instance.new("UIPadding", body)
+bp.PaddingTop = UDim.new(0, 6); bp.PaddingBottom = UDim.new(0, 14)
+
+-- ===== COMPONENTS =====
+local function section(name, emoji)
+    local s = Instance.new("Frame")
+    s.Size = UDim2.new(1, 0, 0, 0)
+    s.AutomaticSize = Enum.AutomaticSize.Y
+    s.BackgroundColor3 = T.Pnl
+    s.BackgroundTransparency = 0.45
+    s.BorderSizePixel = 0
+    s.ZIndex = 3
+    s.Parent = body
+    Instance.new("UICorner", s).CornerRadius = UDim.new(0, 16)
+    local st = Instance.new("UIStroke", s)
+    st.Color = T.A; st.Thickness = 1.5; st.Transparency = 0.6
+    local pad = Instance.new("UIPadding", s)
+    pad.PaddingTop = UDim.new(0, 12); pad.PaddingBottom = UDim.new(0, 12)
+    pad.PaddingLeft = UDim.new(0, 14); pad.PaddingRight = UDim.new(0, 14)
+    local l = Instance.new("UIListLayout", s)
+    l.Padding = UDim.new(0, 9); l.SortOrder = Enum.SortOrder.LayoutOrder
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 0, 22)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = (emoji or "🎃") .. " " .. string.upper(name) .. " " .. (emoji or "🎃")
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 13
+    lbl.TextColor3 = T.A
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = s
+    return s
+end
+
+local function toggle(parent, label, def, cb)
+    local r = Instance.new("Frame")
+    r.Size = UDim2.new(1, 0, 0, 42)
+    r.BackgroundTransparency = 1
+    r.ZIndex = 3
+    r.Parent = parent
+    local t = Instance.new("TextLabel")
+    t.Size = UDim2.new(1, -72, 1, 0)
+    t.BackgroundTransparency = 1
+    t.Text = label
+    t.Font = Enum.Font.GothamMedium
+    t.TextSize = 14
+    t.TextColor3 = T.Tx
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.ZIndex = 3
+    t.Parent = r
+    local sw = Instance.new("Frame")
+    sw.Size = UDim2.new(0, 54, 0, 30)
+    sw.Position = UDim2.new(1, -54, 0.5, -15)
+    sw.BackgroundColor3 = def and T.On or T.Off
+    sw.BackgroundTransparency = 0.25
+    sw.BorderSizePixel = 0
+    sw.ZIndex = 3
+    sw.Parent = r
+    Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
+    local swGlow = Instance.new("UIStroke", sw)
+    swGlow.Color = T.AG; swGlow.Thickness = 3; swGlow.Transparency = def and 0.5 or 1
+    local k = Instance.new("Frame")
+    k.Size = UDim2.new(0, 24, 0, 24)
+    k.Position = def and UDim2.new(1, -28, 0.5, -12) or UDim2.new(0, 4, 0.5, -12)
+    k.BackgroundColor3 = T.Tx
+    k.BackgroundTransparency = 0.15
+    k.BorderSizePixel = 0
+    k.ZIndex = 3
+    k.Parent = sw
+    Instance.new("UICorner", k).CornerRadius = UDim.new(1, 0)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = ""
+    btn.ZIndex = 6
+    btn.Parent = r
+    local state = def
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        TS:Create(sw, TweenInfo.new(0.18), { BackgroundColor3 = state and T.On or T.Off, BackgroundTransparency = 0.25 }):Play()
+        TS:Create(swGlow, TweenInfo.new(0.18), { Transparency = state and 0.5 or 1 }):Play()
+        TS:Create(k, TweenInfo.new(0.18), { Position = state and UDim2.new(1, -28, 0.5, -12) or UDim2.new(0, 4, 0.5, -12) }):Play()
+        cb(state)
+    end)
+end
+
+local function dropdown(parent, label, opts, def, cb)
+    local r = Instance.new("Frame")
+    r.Size = UDim2.new(1, 0, 0, 46)
+    r.BackgroundTransparency = 1
+    r.ZIndex = 3
+    r.Parent = parent
+    local t = Instance.new("TextLabel")
+    t.Size = UDim2.new(1, -132, 1, 0)
+    t.BackgroundTransparency = 1
+    t.Text = label
+    t.Font = Enum.Font.GothamMedium
+    t.TextSize = 13
+    t.TextColor3 = T.Tx
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.ZIndex = 3
+    t.Parent = r
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 124, 1, 0)
+    b.Position = UDim2.new(1, -124, 0, 0)
+    b.BackgroundColor3 = T.PL
+    b.BackgroundTransparency = 0.35
+    b.Text = "🍬 " .. def
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 12
+    b.TextColor3 = T.A
+    b.BorderSizePixel = 0
+    b.ZIndex = 6
+    b.Parent = r
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 12)
+    local l = Instance.new("Frame")
+    l.Size = UDim2.new(0, 168, 0, math.min(#opts, 8) * 32 + 14)
+    l.Position = UDim2.new(1, -168, 1, 6)
+    l.BackgroundColor3 = T.PL
+    l.BackgroundTransparency = 0.2
+    l.BorderSizePixel = 0
+    l.Visible = false
+    l.ZIndex = 10
+    l.Parent = r
+    Instance.new("UICorner", l).CornerRadius = UDim.new(0, 12)
+    local ls = Instance.new("UIStroke", l)
+    ls.Color = T.A; ls.Thickness = 1.2; ls.Transparency = 0.4
+    local sc = Instance.new("ScrollingFrame")
+    sc.Size = UDim2.new(1, 0, 1, 0)
+    sc.BackgroundTransparency = 1
+    sc.BorderSizePixel = 0
+    sc.ScrollBarThickness = 3
+    sc.ScrollBarImageColor3 = T.A
+    sc.CanvasSize = UDim2.new(0, 0, 0, #opts * 32)
+    sc.ZIndex = 11
+    sc.Parent = l
+    Instance.new("UIListLayout", sc)
+    for _, o in ipairs(opts) do
+        local ob = Instance.new("TextButton")
+        ob.Size = UDim2.new(1, 0, 0, 32)
+        ob.BackgroundTransparency = 1
+        ob.Text = o
+        ob.Font = Enum.Font.Gotham
+        ob.TextSize = 12
+        ob.TextColor3 = T.Tx
+        ob.ZIndex = 12
+        ob.Parent = sc
+        ob.MouseEnter:Connect(function() ob.BackgroundTransparency = 0.75; ob.BackgroundColor3 = T.AG end)
+        ob.MouseLeave:Connect(function() ob.BackgroundTransparency = 1 end)
+        ob.MouseButton1Click:Connect(function()
+            b.Text = "🍬 " .. o
+            l.Visible = false
+            cb(o)
+        end)
+    end
+    b.MouseButton1Click:Connect(function() l.Visible = not l.Visible end)
+end
+
+-- ===== BUILD =====
+local skinSec = section("Skinchanger", "🔪")
+toggle(skinSec, "Enable Skin Changer", false, function(v)
+    SkinState.enabled = v
+    if v then
+        local ch = LP.Character
+        if ch then
+            for _, x in ipairs(ch:GetChildren()) do
+                if x:IsA("Tool") then task.defer(function() applyToolSkin(x) end) end
+            end
+        end
+    else
+        local ch = LP.Character
+        if ch then
+            for _, x in ipairs(ch:GetChildren()) do
+                if x:IsA("Tool") then
+                    local sm = x:FindFirstChild("SkinModel")
+                    if sm then sm:Destroy() end
+                    local h = x:FindFirstChild("Handle")
+                    if isBasePart(h) then h.Transparency = 0 end
+                end
+            end
+        end
+    end
+end)
+
+local function getWrapList(toolName)
+    local l = { "None" }
+    local wraps = RS2:FindFirstChild("Wraps")
+    local f = wraps and wraps:FindFirstChild("[" .. toolName .. "]")
+    if f then for _, x in ipairs(f:GetChildren()) do table.insert(l, x.Name) end end
+    return l
+end
+local function getKnifeList()
+    local l = { "None" }
+    local knives = RS2:FindFirstChild("Knives")
+    if knives then for _, x in ipairs(knives:GetChildren()) do table.insert(l, x.Name) end end
+    return l
+end
+
+for _, toolName in ipairs({ "DoubleBarrel", "Revolver", "TacticalShotgun", "SMG", "Shotgun", "Silencer" }) do
+    dropdown(skinSec, toolName, getWrapList(toolName), SkinState[toolName] ~= "" and SkinState[toolName] or "None", function(v)
+        SkinState[toolName] = (v == "None") and "" or v
+        local ch = LP.Character
+        if ch then
+            local t = ch:FindFirstChild("[" .. toolName .. "]")
+            if t then task.defer(function() applyToolSkin(t) end) end
+        end
+    end)
+end
+dropdown(skinSec, "Knife", getKnifeList(), SkinState.special.Knife ~= "" and SkinState.special.Knife or "None", function(v)
+    SkinState.special.Knife = (v == "None") and "" or v
+    local ch = LP.Character
+    if ch then
+        local k = ch:FindFirstChild("[Knife]")
+        if k then task.defer(function() applyToolSkin(k) end) end
+    end
+end)
+
+local beamSec = section("Bullet Beams", "✨")
+toggle(beamSec, "Enable Bullet Beams", false, function(v)
+    BulletBeamsEnabled = v
+    if v then applyBulletBeams() end
+end)
+dropdown(beamSec, "Beam", BEAM_OPTIONS, "Beta", function(v)
+    for k in pairs(BulletChanger) do BulletChanger[k] = v end
+    if BulletBeamsEnabled then applyBulletBeams() end
+end)
+
+-- ===== RIGHT SHIFT TOGGLE =====
+UIS.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        main.Visible = not main.Visible
+    end
+end)
+
+print("[Dimitris Skinchanger GUI] Press RIGHT SHIFT to show/hide the menu.")
